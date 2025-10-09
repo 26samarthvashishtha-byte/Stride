@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Object Detection with Voice</title>
+
+    <!-- TensorFlow.js + COCO-SSD -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.13.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
+    <style>
+      body {
+        font-family: sans-serif;
+        background: #111;
+        color: #fff;
+        text-align: center;
+        margin: 0;
+        overflow: hidden;
+      }
+
+      h2 {
+        margin: 0.5em 0;
+      }
+
+      video,
+      canvas {
+        position: absolute;
+        top: 60px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 95vw;
+        height: auto;
+        border-radius: 10px;
+      }
+
+      canvas {
+        pointer-events: none;
+      }
+
+      #status {
+        position: fixed;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 16px;
+        background: rgba(0, 0, 0, 0.5);
+        padding: 8px 12px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h2>🎥 AI Object Detection + Voice</h2>
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div id="status">Loading model...</div>
+
+    <script>
+      let model;
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      const status = document.getElementById("status");
+
+      let lastSpoken = "";
+      let lastTime = 0;
+
+      // Speak text aloud
+      function speak(text) {
+        const now = Date.now();
+        // Speak only once every 2 seconds
+        if (text === lastSpoken && now - lastTime < 2000) return;
+        lastSpoken = text;
+        lastTime = now;
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = "en-US";
+        utterance.rate = 1;
+        speechSynthesis.speak(utterance);
+      }
+
+      async function initCamera() {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false,
+        });
+        video.srcObject = stream;
+
+        return new Promise((resolve) => {
+          video.onloadedmetadata = () => {
+            video.play();
+            resolve();
+          };
+        });
+      }
+
+      async function detectFrame() {
+        const predictions = await model.detect(video);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const detectedObjects = [];
+
+        predictions.forEach((p) => {
+          ctx.strokeStyle = "#00FF00";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(...p.bbox);
+          ctx.fillStyle = "#00FF00";
+          ctx.font = "16px sans-serif";
+          ctx.fillText(
+            `${p.class} ${(p.score * 100).toFixed(1)}%`,
+            p.bbox[0],
+            p.bbox[1] > 20 ? p.bbox[1] - 5 : 10
+          );
+
+          if (p.score > 0.6) {
+            detectedObjects.push(p.class);
+          }
+        });
+
+        if (detectedObjects.length > 0) {
+          const unique = [...new Set(detectedObjects)];
+          const phrase = "I see " + unique.join(", ");
+          status.textContent = phrase;
+          speak(phrase);
+        } else {
+          status.textContent = "No clear objects detected";
+        }
+
+        requestAnimationFrame(detectFrame);
+      }
+
+      async function main() {
+        await initCamera();
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        status.textContent = "Loading model...";
+        model = await cocoSsd.load();
+        status.textContent = "✅ Model loaded! Detecting...";
+        console.log("Model ready");
+
+        detectFrame();
+      }
+
+      main();
+    </script>
+  </body>
+</html>
