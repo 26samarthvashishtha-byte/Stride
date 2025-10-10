@@ -57,23 +57,26 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const status = document.getElementById("status");
 
+let speaking = false;
 let lastSpoken = "";
-let lastTime = 0;
+let lastSpeakTime = 0;
 
-// Speak function
 function speakNow(text) {
   const now = Date.now();
-  if (text === lastSpoken && now - lastTime < 2000) return;
+  if (speaking) return; // Wait until current speech ends
+  if (text === lastSpoken && now - lastSpeakTime < 2000) return;
+
   lastSpoken = text;
-  lastTime = now;
-  window.speechSynthesis.cancel();
+  lastSpeakTime = now;
+
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "en-US";
   utterance.rate = 1;
+  speaking = true;
+  utterance.onend = () => (speaking = false);
   window.speechSynthesis.speak(utterance);
 }
 
-// Access camera
 async function initCamera() {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "environment" },
@@ -88,7 +91,6 @@ async function initCamera() {
   });
 }
 
-// Object detection loop
 async function detectFrame() {
   const predictions = await model.detect(video);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -102,7 +104,6 @@ async function detectFrame() {
       const area = (w * h) / (canvas.width * canvas.height);
       let distanceLabel;
 
-      // Estimate closeness by bounding box size
       if (area > 0.25) distanceLabel = "very close";
       else if (area > 0.1) distanceLabel = "close";
       else distanceLabel = "far away";
@@ -130,7 +131,6 @@ async function detectFrame() {
   requestAnimationFrame(detectFrame);
 }
 
-// Main
 async function main() {
   await initCamera();
   canvas.width = video.videoWidth;
@@ -140,6 +140,7 @@ async function main() {
   status.textContent = "Model loaded! Detecting...";
   detectFrame();
 }
+
 main();
 </script>
 </body>
