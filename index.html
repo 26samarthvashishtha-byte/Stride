@@ -1,146 +1,146 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Object Detection with Voice (Fixed)</title>
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Object Distance Announcer</title>
 
-    <!-- TensorFlow.js + COCO-SSD -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.13.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+<!-- TensorFlow.js + COCO-SSD -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.13.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
-    <style>
-      body {
-        font-family: sans-serif;
-        background: #111;
-        color: #fff;
-        text-align: center;
-        margin: 0;
-        overflow: hidden;
-      }
+<style>
+  body {
+    margin: 0;
+    background: #000;
+    color: #fff;
+    font-family: sans-serif;
+    text-align: center;
+  }
+  h2 {
+    margin: 0.5em 0;
+  }
+  video, canvas {
+    position: absolute;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 95vw;
+    height: auto;
+    border-radius: 10px;
+  }
+  canvas {
+    pointer-events: none;
+  }
+  #status {
+    position: fixed;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.5);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 16px;
+  }
+</style>
+</head>
+<body>
+<h2>AI Object Distance Announcer</h2>
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+<div id="status">Loading model...</div>
 
-      h2 { margin: 0.5em 0; }
+<script>
+let model;
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const status = document.getElementById("status");
 
-      video, canvas {
-        position: absolute;
-        top: 60px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 95vw;
-        height: auto;
-        border-radius: 10px;
-      }
+let lastSpoken = "";
+let lastTime = 0;
 
-      canvas { pointer-events: none; }
+// Speak function
+function speakNow(text) {
+  const now = Date.now();
+  if (text === lastSpoken && now - lastTime < 2000) return;
+  lastSpoken = text;
+  lastTime = now;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "en-US";
+  utterance.rate = 1;
+  window.speechSynthesis.speak(utterance);
+}
 
-      #status {
-        position: fixed;
-        bottom: 10px;
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 16px;
-        background: rgba(0,0,0,0.5);
-        padding: 8px 12px;
-        border-radius: 6px;
-      }
-    </style>
-  </head>
+// Access camera
+async function initCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "environment" },
+    audio: false,
+  });
+  video.srcObject = stream;
+  return new Promise((resolve) => {
+    video.onloadedmetadata = () => {
+      video.play();
+      resolve();
+    };
+  });
+}
 
-  <body>
-    <h2>🎥 AI Object Detection + Voice (Real-Time)</h2>
-    <video id="video" autoplay playsinline muted></video>
-    <canvas id="canvas"></canvas>
-    <div id="status">Loading model...</div>
+// Object detection loop
+async function detectFrame() {
+  const predictions = await model.detect(video);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    <script>
-      let model;
-      const video = document.getElementById("video");
-      const canvas = document.getElementById("canvas");
-      const ctx = canvas.getContext("2d");
-      const status = document.getElementById("status");
+  const spoken = [];
 
-      let lastSpoken = "";
-      let lastTime = 0;
+  for (const p of predictions) {
+    if (p.score >= 0.6) {
+      const [x, y, w, h] = p.bbox;
+      const area = (w * h) / (canvas.width * canvas.height);
+      let distanceLabel;
 
-      // --- Text-to-speech helper ---
-      function speakNow(text) {
-        const now = Date.now();
-        // Speak only once every 2 seconds if it's the same phrase
-        if (text === lastSpoken && now - lastTime < 2000) return;
-        lastSpoken = text;
-        lastTime = now;
+      // Estimate closeness by bounding box size
+      if (area > 0.25) distanceLabel = "very close";
+      else if (area > 0.1) distanceLabel = "close";
+      else distanceLabel = "far away";
 
-        // ⚡ cancel any queued speech to prevent 30-second delay
-        window.speechSynthesis.cancel();
+      ctx.strokeStyle = "#00FF00";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = "#00FF00";
+      ctx.font = "16px sans-serif";
+      ctx.fillText(`${p.class} (${distanceLabel})`, x, y > 20 ? y - 5 : 10);
 
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = "en-US";
-        u.rate = 1;
-        window.speechSynthesis.speak(u);
-      }
+      spoken.push(`${p.class} ${distanceLabel}`);
+    }
+  }
 
-      async function initCamera() {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
-          audio: false,
-        });
-        video.srcObject = stream;
-        return new Promise((resolve) => {
-          video.onloadedmetadata = () => {
-            video.play();
-            resolve();
-          };
-        });
-      }
+  if (spoken.length) {
+    const unique = [...new Set(spoken)];
+    const phrase = unique.join(", ");
+    status.textContent = "Detected: " + phrase;
+    speakNow(phrase);
+  } else {
+    status.textContent = "No confident objects detected";
+  }
 
-      async function detectFrame() {
-        const predictions = await model.detect(video);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  requestAnimationFrame(detectFrame);
+}
 
-        const detected = [];
-
-        predictions.forEach((p) => {
-          if (p.score >= 0.6) { // only ≥60 % confidence
-            ctx.strokeStyle = "#00FF00";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(...p.bbox);
-            ctx.fillStyle = "#00FF00";
-            ctx.font = "16px sans-serif";
-            ctx.fillText(
-              `${p.class} ${(p.score * 100).toFixed(1)}%`,
-              p.bbox[0],
-              p.bbox[1] > 20 ? p.bbox[1] - 5 : 10
-            );
-            detected.push(p.class);
-          }
-        });
-
-        if (detected.length > 0) {
-          const unique = [...new Set(detected)];
-          const phrase = "I see " + unique.join(", ");
-          status.textContent = phrase;
-          speakNow(phrase);
-        } else {
-          status.textContent = "No confident objects detected";
-        }
-
-        requestAnimationFrame(detectFrame);
-      }
-
-      async function main() {
-        await initCamera();
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-
-        status.textContent = "Loading model...";
-        await tf.setBackend("webgl"); // faster
-        model = await cocoSsd.load();
-        status.textContent = "✅ Model loaded! Detecting...";
-        detectFrame();
-      }
-
-      main();
-    </script>
-  </body>
+// Main
+async function main() {
+  await initCamera();
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  await tf.setBackend("webgl");
+  model = await cocoSsd.load();
+  status.textContent = "Model loaded! Detecting...";
+  detectFrame();
+}
+main();
+</script>
+</body>
 </html>
