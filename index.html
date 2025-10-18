@@ -1,147 +1,121 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AI Object Distance Announcer</title>
-
-<!-- TensorFlow.js + COCO-SSD -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.13.0"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-
-<style>
-  body {
-    margin: 0;
-    background: #000;
-    color: #fff;
-    font-family: sans-serif;
-    text-align: center;
-  }
-  h2 {
-    margin: 0.5em 0;
-  }
-  video, canvas {
-    position: absolute;
-    top: 60px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 95vw;
-    height: auto;
-    border-radius: 10px;
-  }
-  canvas {
-    pointer-events: none;
-  }
-  #status {
-    position: fixed;
-    bottom: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.5);
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 16px;
-  }
-</style>
+  <meta charset="UTF-8">
+  <title>Smart Object Detection with Voice</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: #111;
+      color: #eee;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    video, canvas {
+      border-radius: 12px;
+      max-width: 90vw;
+      height: auto;
+      margin-top: 20px;
+    }
+    h1 {
+      margin-top: 10px;
+      font-size: 1.4rem;
+      color: #00ff99;
+    }
+  </style>
 </head>
 <body>
-<h2>AI Object Distance Announcer</h2>
-<video id="video" autoplay playsinline muted></video>
-<canvas id="canvas"></canvas>
-<div id="status">Loading model...</div>
+  <h1>Real-Time Object Detection (with Speech)</h1>
+  <video id="webcam" autoplay muted playsinline></video>
+  <canvas id="canvas"></canvas>
 
-<script>
-let model;
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-const status = document.getElementById("status");
+  <script>
+    let model;
+    const video = document.getElementById("webcam");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
 
-let speaking = false;
-let lastSpoken = "";
-let lastSpeakTime = 0;
+    // --- SETTINGS ---
+    const detectionInterval = 150; // ms between detections
+    const minConfidence = 0.6;     // ignore lower confidence
+    const allowedClasses = null;   // or like ["person", "dog", "car"]
+    let lastSpoken = "";
+    let speakCooldown = 0;
 
-function speakNow(text) {
-  const now = Date.now();
-  if (speaking) return; // Wait until current speech ends
-  if (text === lastSpoken && now - lastSpeakTime < 2000) return;
-
-  lastSpoken = text;
-  lastSpeakTime = now;
-
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "en-US";
-  utterance.rate = 1;
-  speaking = true;
-  utterance.onend = () => (speaking = false);
-  window.speechSynthesis.speak(utterance);
-}
-
-async function initCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "environment" },
-    audio: false,
-  });
-  video.srcObject = stream;
-  return new Promise((resolve) => {
-    video.onloadedmetadata = () => {
-      video.play();
-      resolve();
-    };
-  });
-}
-
-async function detectFrame() {
-  const predictions = await model.detect(video);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  const spoken = [];
-
-  for (const p of predictions) {
-    if (p.score >= 0.6) {
-      const [x, y, w, h] = p.bbox;
-      const area = (w * h) / (canvas.width * canvas.height);
-      let distanceLabel;
-
-      if (area > 0.25) distanceLabel = "very close";
-      else if (area > 0.1) distanceLabel = "close";
-      else distanceLabel = "far away";
-
-      ctx.strokeStyle = "#00FF00";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x, y, w, h);
-      ctx.fillStyle = "#00FF00";
-      ctx.font = "16px sans-serif";
-      ctx.fillText(`${p.class} (${distanceLabel})`, x, y > 20 ? y - 5 : 10);
-
-      spoken.push(`${p.class} ${distanceLabel}`);
+    // --- Load Model and Video ---
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720, facingMode: "environment" },
+        audio: false
+      });
+      video.srcObject = stream;
+      return new Promise(resolve => {
+        video.onloadedmetadata = () => resolve(video);
+      });
     }
-  }
 
-  if (spoken.length) {
-    const unique = [...new Set(spoken)];
-    const phrase = unique.join(", ");
-    status.textContent = "Detected: " + phrase;
-    speakNow(phrase);
-  } else {
-    status.textContent = "No confident objects detected";
-  }
+    async function init() {
+      try {
+        await tf.setBackend('webgpu');  // faster GPU mode if supported
+        await tf.ready();
+      } catch (e) {
+        console.warn("WebGPU not available, using fallback CPU/WebGL backend.");
+      }
+      model = await cocoSsd.load();
+      await setupCamera();
+      video.play();
+      detectLoop();
+    }
 
-  requestAnimationFrame(detectFrame);
-}
+    // --- Speech Utility ---
+    function speak(text) {
+      if (!text || text === lastSpoken || speakCooldown > 0) return;
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.1;
+      window.speechSynthesis.speak(utterance);
+      lastSpoken = text;
+      speakCooldown = 10; // ~1.5 sec cooldown
+    }
 
-async function main() {
-  await initCamera();
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  await tf.setBackend("webgl");
-  model = await cocoSsd.load();
-  status.textContent = "Model loaded! Detecting...";
-  detectFrame();
-}
+    // --- Detection Loop ---
+    async function detectLoop() {
+      if (video.readyState === 4) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.filter = "contrast(120%) brightness(110%)";
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-main();
-</script>
+        const predictions = await model.detect(video);
+        let spokenObjects = [];
+
+        for (let p of predictions) {
+          if (p.score >= minConfidence && (!allowedClasses || allowedClasses.includes(p.class))) {
+            const [x, y, w, h] = p.bbox;
+            ctx.strokeStyle = "#00ff99";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillStyle = "#00ff99";
+            ctx.font = "16px sans-serif";
+            ctx.fillText(`${p.class} (${(p.score*100).toFixed(1)}%)`, x, y > 20 ? y - 5 : y + 15);
+            spokenObjects.push(p.class);
+          }
+        }
+
+        if (spokenObjects.length > 0) {
+          speak("I see " + spokenObjects.join(", "));
+        }
+      }
+
+      if (speakCooldown > 0) speakCooldown--;
+      setTimeout(detectLoop, detectionInterval);
+    }
+
+    init();
+  </script>
 </body>
 </html>
