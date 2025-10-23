@@ -3,91 +3,68 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smart Vision Stick (Adaptive Mode)</title>
+  <title>Smart Vision Stick (Fixed Detection)</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.13.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@vladmandic/yolo@0.7.7/dist/yolo.min.js"></script>
   <style>
-    body {
-      background: #111;
-      color: white;
-      font-family: system-ui, sans-serif;
-      text-align: center;
-      margin: 0;
-    }
-    h2 {
-      margin: 12px 0;
-    }
-    video, canvas {
-      width: 95%;
-      max-width: 420px;
-      border-radius: 16px;
-      box-shadow: 0 0 12px rgba(0,0,0,0.5);
-    }
-    button {
-      background: #007bff;
-      color: white;
-      border: none;
-      padding: 12px 22px;
-      border-radius: 10px;
-      font-size: 16px;
-      margin: 8px;
-    }
-    #distance {
-      font-size: 18px;
-      margin-top: 10px;
-    }
+    body { background:#111; color:white; font-family:sans-serif; text-align:center; }
+    video, canvas { width:95%; max-width:420px; border-radius:12px; margin-top:8px; }
+    button { background:#007bff; color:white; border:none; padding:10px 20px; border-radius:8px; margin:10px; }
+    #distance { font-size:18px; margin-top:6px; }
   </style>
 </head>
 <body>
-  <h2>Smart Vision Stick (Adaptive Mode)</h2>
+  <h2>Smart Vision Stick</h2>
   <video id="video" autoplay muted playsinline></video>
   <canvas id="canvas"></canvas><br>
   <button id="connectBtn">Connect Bluetooth (Optional)</button>
   <p id="distance">Bluetooth: Not connected (using vision-based distance)</p>
 
   <script>
-    let model, video = document.getElementById('video'),
-        canvas = document.getElementById('canvas'),
-        ctx = canvas.getContext('2d'),
-        distanceText = document.getElementById('distance'),
-        currentDistance = null,
-        speaking = false,
-        bluetoothConnected = false;
+    let video = document.getElementById('video');
+    let canvas = document.getElementById('canvas');
+    let ctx = canvas.getContext('2d');
+    let distanceText = document.getElementById('distance');
+    let model, speaking = false, currentDistance = null, bluetoothConnected = false;
 
-    // ===== CAMERA SETUP =====
     async function setupCamera() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
       video.srcObject = stream;
-      return new Promise(resolve => { video.onloadedmetadata = () => resolve(video); });
+      await new Promise(res => video.onloadedmetadata = res);
     }
 
-    // ===== LOAD YOLOv8 =====
     async function loadModel() {
+      distanceText.textContent = "Loading detection model...";
       model = await yolo.v8n();
-      console.log("YOLOv8 model loaded");
+      console.log("✅ YOLOv8 model loaded:", model);
+      distanceText.textContent = "Model ready — starting detection...";
     }
 
-    // ===== OBJECT DETECTION =====
     async function detectFrame() {
+      if (!model) return requestAnimationFrame(detectFrame);
       const results = await model.detect(video);
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0);
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+      if (results && results.length > 0) {
+        console.log("Detections:", results.length);
+      }
 
       for (const obj of results) {
         if (obj.confidence >= 0.6) {
           const [x, y, w, h] = obj.box;
-          ctx.strokeStyle = "#00FF88";
+          ctx.strokeStyle = "#00ff88";
           ctx.lineWidth = 2;
           ctx.strokeRect(x, y, w, h);
-          ctx.fillStyle = "#00FF88";
+          ctx.fillStyle = "#00ff88";
+          ctx.font = "14px sans-serif";
           ctx.fillText(`${obj.class} ${(obj.confidence*100).toFixed(0)}%`, x + 5, y - 5);
 
-          // Estimate distance visually if Bluetooth not connected
+          // Estimate distance if no Bluetooth
           let distanceLabel = "";
           if (!bluetoothConnected) {
-            const boxArea = (w * h);
             const frameArea = video.videoWidth * video.videoHeight;
+            const boxArea = w * h;
             const ratio = boxArea / frameArea;
 
             if (ratio > 0.3) distanceLabel = "very close";
@@ -98,33 +75,29 @@
 
           if (!speaking) {
             speaking = true;
-            let phrase = "";
-            if (bluetoothConnected && currentDistance !== null) {
-              phrase = `${obj.class} detected ${currentDistance} centimeters away`;
-            } else {
-              phrase = `${obj.class} detected ${distanceLabel}`;
-            }
-
-            const utterance = new SpeechSynthesisUtterance(phrase);
-            utterance.rate = 1.0;
-            utterance.pitch = 1.0;
-            speechSynthesis.speak(utterance);
-            utterance.onend = () => (speaking = false);
+            let phrase = bluetoothConnected && currentDistance !== null
+              ? `${obj.class} detected ${currentDistance} centimeters away`
+              : `${obj.class} detected ${distanceLabel}`;
+            const u = new SpeechSynthesisUtterance(phrase);
+            u.rate = 1.0;
+            u.onend = () => speaking = false;
+            speechSynthesis.speak(u);
           }
         }
       }
+
       requestAnimationFrame(detectFrame);
     }
 
-    // ===== BLUETOOTH (Web Serial) =====
+    // ===== BLUETOOTH CONNECTION =====
     if ('serial' in navigator) {
       document.getElementById('connectBtn').onclick = async () => {
         try {
           const port = await navigator.serial.requestPort();
           await port.open({ baudRate: 9600 });
-          const textDecoder = new TextDecoderStream();
-          const readableClosed = port.readable.pipeTo(textDecoder.writable);
-          const reader = textDecoder.readable.getReader();
+          const decoder = new TextDecoderStream();
+          port.readable.pipeTo(decoder.writable);
+          const reader = decoder.readable.getReader();
 
           bluetoothConnected = true;
           distanceText.textContent = "Bluetooth: Connected — receiving distance data";
@@ -138,32 +111,24 @@
                 const cm = parseInt(match[1]);
                 currentDistance = cm;
                 distanceText.textContent = `Bluetooth: Connected — ${cm} cm`;
-                if (cm < 60 && !speaking) {
-                  speaking = true;
-                  const warning = new SpeechSynthesisUtterance(`Object ${cm} centimeters away`);
-                  warning.rate = 1.1;
-                  warning.pitch = 1.0;
-                  speechSynthesis.speak(warning);
-                  warning.onend = () => (speaking = false);
-                }
               }
             }
           }
         } catch (err) {
-          console.error("Serial read error:", err);
-          alert("Bluetooth connection failed. Switching to vision-only mode.");
+          console.error("Bluetooth error:", err);
           bluetoothConnected = false;
           distanceText.textContent = "Bluetooth: Not connected (using vision-based distance)";
         }
       };
     } else {
       document.getElementById('connectBtn').disabled = true;
-      alert("Web Serial not supported — use Chrome or Edge on Android.");
+      alert("Web Serial not supported — use Chrome/Edge on Android.");
     }
 
-    // ===== MAIN =====
     async function main() {
       await setupCamera();
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
       await loadModel();
       detectFrame();
     }
