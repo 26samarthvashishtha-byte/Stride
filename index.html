@@ -3,9 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smart Vision Stick — Stable Version</title>
+  <title>Stride — Smart Vision Stick</title>
+
+  <!-- TensorFlow + COCO -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.13.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
   <style>
     body {
       background-color: #111;
@@ -15,15 +18,18 @@
       margin: 0;
       padding: 0;
     }
+
     h2 {
       margin: 12px 0;
     }
+
     video, canvas {
       width: 95%;
       max-width: 420px;
       border-radius: 16px;
       box-shadow: 0 0 12px rgba(0,0,0,0.5);
     }
+
     button {
       background: #007bff;
       color: white;
@@ -33,69 +39,112 @@
       font-size: 16px;
       margin: 8px;
     }
+
     #status {
       margin-top: 10px;
       font-size: 18px;
     }
+
+    /* ===== LOADING SCREEN ===== */
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: #111;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+      transition: opacity 0.6s ease;
+    }
+
+    .loader-ring {
+      width: 64px;
+      height: 64px;
+      border: 6px solid #222;
+      border-top: 6px solid #00ff88;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    #loading h1 {
+      margin: 12px 0 4px;
+      font-size: 28px;
+      letter-spacing: 1px;
+      color: #00ff88;
+    }
+
+    #loading p {
+      font-size: 14px;
+      color: #aaa;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
   </style>
 </head>
+
 <body>
 
-  <!-- ===== LOADING SCREEN ===== -->
-  <div id="loadingScreen" 
-    style="position: fixed; top:0; left:0; width:100%; height:100%; 
-    background:#000; color:white; display:flex; 
-    flex-direction:column; justify-content:center; 
-    align-items:center; font-size:22px; z-index:999;">
-    <p id="loadingText">Loading…</p>
+  <!-- ===== LOADER ===== -->
+  <div id="loading">
+    <div class="loader-ring"></div>
+    <h1>Stride</h1>
+    <p>Loading vision system…</p>
   </div>
 
-  <h2>Smart Vision Stick (COCO + Bluetooth)</h2>
+  <h2>Stride — Smart Vision Stick</h2>
+
   <video id="video" autoplay muted playsinline></video>
   <canvas id="canvas"></canvas><br>
+
   <button id="connectBtn">Connect Bluetooth (Optional)</button>
   <p id="status">Bluetooth: Not connected</p>
 
   <script>
     let model;
-    let video = document.getElementById('video');
-    let canvas = document.getElementById('canvas');
-    let ctx = canvas.getContext('2d');
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const statusEl = document.getElementById("status");
+
     let speaking = false;
     let bluetoothConnected = false;
     let currentDistance = null;
-    let statusEl = document.getElementById('status');
 
-    // ==== CAMERA SETUP ====
+    /* ===== CAMERA ===== */
     async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" }
+      });
       video.srcObject = stream;
-      return new Promise(resolve => { video.onloadedmetadata = () => resolve(video); });
-    }
-
-    // ==== LOAD MODEL ====
-    async function loadModel() {
-      model = await cocoSsd.load();
-      console.log("✅ COCO-SSD model loaded");
-      statusEl.textContent = "Model loaded — detecting objects";
-    }
-
-    // ==== TTS WARMUP ====
-    async function warmupTTS() {
       return new Promise(resolve => {
-        const utter = new SpeechSynthesisUtterance("Initializing");
-        utter.volume = 0;
-        utter.rate = 1;
-        utter.onend = () => resolve();
-        speechSynthesis.speak(utter);
+        video.onloadedmetadata = () => resolve(video);
       });
     }
 
-    // ==== DETECTION LOOP ====
+    /* ===== LOAD MODEL ===== */
+    async function loadModel() {
+      model = await cocoSsd.load();
+
+      // fade out loader
+      const loader = document.getElementById("loading");
+      loader.style.opacity = 0;
+      setTimeout(() => loader.style.display = "none", 600);
+
+      statusEl.textContent = "Model loaded — detecting objects";
+    }
+
+    /* ===== DETECTION LOOP ===== */
     async function detectFrame() {
       const predictions = await model.detect(video);
+
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(video, 0, 0);
 
@@ -103,37 +152,40 @@
         if (pred.score > 0.6) {
           ctx.strokeStyle = "#00FF88";
           ctx.lineWidth = 2;
-          ctx.strokeRect(pred.bbox[0], pred.bbox[1], pred.bbox[2], pred.bbox[3]);
+          ctx.strokeRect(...pred.bbox);
+
           ctx.fillStyle = "#00FF88";
           ctx.font = "14px sans-serif";
-          ctx.fillText(pred.class + " " + Math.round(pred.score * 100) + "%", pred.bbox[0] + 5, pred.bbox[1] - 5);
+          ctx.fillText(
+            `${pred.class} ${Math.round(pred.score * 100)}%`,
+            pred.bbox[0] + 5,
+            pred.bbox[1] - 5
+          );
 
           let phrase;
-
-          // Bluetooth distance
           if (bluetoothConnected && currentDistance !== null) {
             phrase = `${pred.class} detected ${currentDistance} centimeters away`;
           } else {
-            // Visual distance estimation
             const area = pred.bbox[2] * pred.bbox[3];
             const frameArea = video.videoWidth * video.videoHeight;
             const ratio = area / frameArea;
-            let distanceLabel;
-            if (ratio > 0.3) distanceLabel = "very close";
-            else if (ratio > 0.15) distanceLabel = "close";
-            else if (ratio > 0.05) distanceLabel = "medium distance";
-            else distanceLabel = "far";
-            phrase = `${pred.class} detected ${distanceLabel}`;
+
+            let distance;
+            if (ratio > 0.3) distance = "very close";
+            else if (ratio > 0.15) distance = "close";
+            else if (ratio > 0.05) distance = "medium distance";
+            else distance = "far";
+
+            phrase = `${pred.class} detected ${distance}`;
           }
 
-          // Speaking
           if (!speaking) {
             speaking = true;
-            const u = new SpeechSynthesisUtterance(phrase);
-            u.rate = 1.0;
-            u.pitch = 1.0;
-            speechSynthesis.speak(u);
-            u.onend = () => speaking = false;
+            const utter = new SpeechSynthesisUtterance(phrase);
+            utter.rate = 1;
+            utter.pitch = 1;
+            speechSynthesis.speak(utter);
+            utter.onend = () => speaking = false;
           }
         }
       });
@@ -141,12 +193,13 @@
       requestAnimationFrame(detectFrame);
     }
 
-    // ==== BLUETOOTH CONNECTION ====
-    if ('serial' in navigator) {
-      document.getElementById('connectBtn').onclick = async () => {
+    /* ===== BLUETOOTH ===== */
+    if ("serial" in navigator) {
+      document.getElementById("connectBtn").onclick = async () => {
         try {
           const port = await navigator.serial.requestPort();
           await port.open({ baudRate: 9600 });
+
           const decoder = new TextDecoderStream();
           port.readable.pipeTo(decoder.writable);
           const reader = decoder.readable.getReader();
@@ -157,44 +210,26 @@
           while (true) {
             const { value, done } = await reader.read();
             if (done) break;
-            if (value) {
-              const match = value.match(/(\d+)\s*cm/);
-              if (match) {
-                currentDistance = parseInt(match[1]);
-                statusEl.textContent = `Bluetooth: ${currentDistance} cm`;
-              }
+
+            const match = value?.match(/(\d+)\s*cm/);
+            if (match) {
+              currentDistance = parseInt(match[1]);
+              statusEl.textContent = `Bluetooth: ${currentDistance} cm`;
             }
           }
         } catch (err) {
-          console.error("Bluetooth error:", err);
           bluetoothConnected = false;
           statusEl.textContent = "Bluetooth: Not connected";
         }
       };
     } else {
-      document.getElementById('connectBtn').disabled = true;
-      alert("Web Serial not supported — use Chrome or Edge on Android.");
+      document.getElementById("connectBtn").disabled = true;
     }
 
-    // ==== MAIN (NOW WITH LOADING SCREEN) ====
+    /* ===== MAIN ===== */
     async function main() {
-      const loadingScreen = document.getElementById("loadingScreen");
-      const loadingText = document.getElementById("loadingText");
-
-      loadingText.textContent = "Loading camera…";
       await setupCamera();
-
-      loadingText.textContent = "Loading detection model…";
       await loadModel();
-
-      loadingText.textContent = "Loading speech engine…";
-      await warmupTTS();
-
-      loadingText.textContent = "Starting…";
-      await new Promise(r => setTimeout(r, 300));
-
-      loadingScreen.style.display = "none";
-
       detectFrame();
     }
 
