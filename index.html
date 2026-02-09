@@ -2,17 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Stride — Smart Vision Stick</title>
 
-  <!-- TensorFlow + COCO -->
+  <!-- TensorFlow -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.13.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
   <style>
     body {
-      background-color: #111;
-      color: white;
+      background: #111;
+      color: #fff;
       font-family: system-ui, sans-serif;
       text-align: center;
       margin: 0;
@@ -27,7 +27,7 @@
       width: 95%;
       max-width: 420px;
       border-radius: 16px;
-      box-shadow: 0 0 12px rgba(0,0,0,0.5);
+      margin-top: 10px;
     }
 
     button {
@@ -37,203 +37,164 @@
       padding: 12px 22px;
       border-radius: 10px;
       font-size: 16px;
-      margin: 8px;
+      margin: 10px;
     }
 
-    #status {
-      margin-top: 10px;
+    #status, #distance {
       font-size: 18px;
+      margin-top: 10px;
     }
 
-    /* ===== LOADING SCREEN ===== */
-    #loading {
-      position: fixed;
-      inset: 0;
-      background: #111;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      z-index: 999;
-      transition: opacity 0.6s ease;
+    #loader {
+      margin-top: 20px;
+      font-size: 22px;
+      animation: pulse 1.2s infinite;
     }
 
-    .loader-ring {
-      width: 64px;
-      height: 64px;
-      border: 6px solid #222;
-      border-top: 6px solid #00ff88;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-
-    #loading h1 {
-      margin: 12px 0 4px;
-      font-size: 28px;
-      letter-spacing: 1px;
-      color: #00ff88;
-    }
-
-    #loading p {
-      font-size: 14px;
-      color: #aaa;
-    }
-
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
-      }
+    @keyframes pulse {
+      0% { opacity: 0.3; }
+      50% { opacity: 1; }
+      100% { opacity: 0.3; }
     }
   </style>
 </head>
 
 <body>
 
-  <!-- ===== LOADER ===== -->
-  <div id="loading">
-    <div class="loader-ring"></div>
-    <h1>Stride</h1>
-    <p>Loading vision system…</p>
-  </div>
-
   <h2>Stride — Smart Vision Stick</h2>
 
+  <div id="loader">Stride loading…</div>
+
   <video id="video" autoplay muted playsinline></video>
-  <canvas id="canvas"></canvas><br>
+  <canvas id="canvas"></canvas>
 
-  <button id="connectBtn">Connect Bluetooth (Optional)</button>
-  <p id="status">Bluetooth: Not connected</p>
+  <br>
 
-  <script>
-    let model;
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
-    const statusEl = document.getElementById("status");
+  <button onclick="connectBLE()">Connect BLE (HM-10)</button>
 
-    let speaking = false;
-    let bluetoothConnected = false;
-    let currentDistance = null;
+  <p id="status">BLE: Not connected</p>
+  <p id="distance">Distance: -- cm</p>
 
-    /* ===== CAMERA ===== */
-    async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" }
-      });
-      video.srcObject = stream;
-      return new Promise(resolve => {
-        video.onloadedmetadata = () => resolve(video);
-      });
+<script>
+/* ======================
+   GLOBAL VARIABLES
+====================== */
+let model;
+let video = document.getElementById("video");
+let canvas = document.getElementById("canvas");
+let ctx = canvas.getContext("2d");
+let speaking = false;
+let currentDistance = null;
+
+/* ======================
+   CAMERA SETUP
+====================== */
+async function setupCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "environment" }
+  });
+  video.srcObject = stream;
+  return new Promise(resolve => {
+    video.onloadedmetadata = () => resolve(video);
+  });
+}
+
+/* ======================
+   LOAD AI MODEL
+====================== */
+async function loadModel() {
+  model = await cocoSsd.load();
+  document.getElementById("loader").style.display = "none";
+}
+
+/* ======================
+   OBJECT DETECTION LOOP
+====================== */
+async function detectFrame() {
+  const predictions = await model.detect(video);
+
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(video, 0, 0);
+
+  predictions.forEach(pred => {
+    if (pred.score > 0.6) {
+      ctx.strokeStyle = "#00ff88";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(...pred.bbox);
+      ctx.fillStyle = "#00ff88";
+      ctx.fillText(pred.class, pred.bbox[0] + 5, pred.bbox[1] - 5);
+
+      let phrase;
+      if (currentDistance !== null) {
+        phrase = `${pred.class} detected ${currentDistance} centimeters away`;
+      } else {
+        phrase = `${pred.class} detected`;
+      }
+
+      if (!speaking) {
+        speaking = true;
+        const u = new SpeechSynthesisUtterance(phrase);
+        speechSynthesis.speak(u);
+        u.onend = () => speaking = false;
+      }
     }
+  });
 
-    /* ===== LOAD MODEL ===== */
-    async function loadModel() {
-      model = await cocoSsd.load();
+  requestAnimationFrame(detectFrame);
+}
 
-      // fade out loader
-      const loader = document.getElementById("loading");
-      loader.style.opacity = 0;
-      setTimeout(() => loader.style.display = "none", 600);
+/* ======================
+   BLE CONNECTION (HM-10)
+====================== */
+async function connectBLE() {
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "HM" }],
+      optionalServices: ["0000ffe0-0000-1000-8000-00805f9b34fb"]
+    });
 
-      statusEl.textContent = "Model loaded — detecting objects";
-    }
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(
+      "0000ffe0-0000-1000-8000-00805f9b34fb"
+    );
+    const characteristic = await service.getCharacteristic(
+      "0000ffe1-0000-1000-8000-00805f9b34fb"
+    );
 
-    /* ===== DETECTION LOOP ===== */
-    async function detectFrame() {
-      const predictions = await model.detect(video);
+    await characteristic.startNotifications();
 
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+    document.getElementById("status").textContent = "BLE: Connected";
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(video, 0, 0);
+    characteristic.addEventListener("characteristicvaluechanged", event => {
+      const value = new TextDecoder().decode(event.target.value).trim();
+      const num = parseInt(value);
 
-      predictions.forEach(pred => {
-        if (pred.score > 0.6) {
-          ctx.strokeStyle = "#00FF88";
-          ctx.lineWidth = 2;
-          ctx.strokeRect(...pred.bbox);
+      if (!isNaN(num)) {
+        currentDistance = num;
+        document.getElementById("distance").textContent =
+          `Distance: ${num} cm`;
+      }
+    });
 
-          ctx.fillStyle = "#00FF88";
-          ctx.font = "14px sans-serif";
-          ctx.fillText(
-            `${pred.class} ${Math.round(pred.score * 100)}%`,
-            pred.bbox[0] + 5,
-            pred.bbox[1] - 5
-          );
+  } catch (err) {
+    document.getElementById("status").textContent = "BLE: Connection failed";
+    console.error(err);
+  }
+}
 
-          let phrase;
-          if (bluetoothConnected && currentDistance !== null) {
-            phrase = `${pred.class} detected ${currentDistance} centimeters away`;
-          } else {
-            const area = pred.bbox[2] * pred.bbox[3];
-            const frameArea = video.videoWidth * video.videoHeight;
-            const ratio = area / frameArea;
+/* ======================
+   MAIN
+====================== */
+async function main() {
+  await setupCamera();
+  await loadModel();
+  detectFrame();
+}
 
-            let distance;
-            if (ratio > 0.3) distance = "very close";
-            else if (ratio > 0.15) distance = "close";
-            else if (ratio > 0.05) distance = "medium distance";
-            else distance = "far";
+main();
+</script>
 
-            phrase = `${pred.class} detected ${distance}`;
-          }
-
-          if (!speaking) {
-            speaking = true;
-            const utter = new SpeechSynthesisUtterance(phrase);
-            utter.rate = 1;
-            utter.pitch = 1;
-            speechSynthesis.speak(utter);
-            utter.onend = () => speaking = false;
-          }
-        }
-      });
-
-      requestAnimationFrame(detectFrame);
-    }
-
-    /* ===== BLUETOOTH ===== */
-    if ("serial" in navigator) {
-      document.getElementById("connectBtn").onclick = async () => {
-        try {
-          const port = await navigator.serial.requestPort();
-          await port.open({ baudRate: 9600 });
-
-          const decoder = new TextDecoderStream();
-          port.readable.pipeTo(decoder.writable);
-          const reader = decoder.readable.getReader();
-
-          bluetoothConnected = true;
-          statusEl.textContent = "Bluetooth: Connected";
-
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-
-            const match = value?.match(/(\d+)\s*cm/);
-            if (match) {
-              currentDistance = parseInt(match[1]);
-              statusEl.textContent = `Bluetooth: ${currentDistance} cm`;
-            }
-          }
-        } catch (err) {
-          bluetoothConnected = false;
-          statusEl.textContent = "Bluetooth: Not connected";
-        }
-      };
-    } else {
-      document.getElementById("connectBtn").disabled = true;
-    }
-
-    /* ===== MAIN ===== */
-    async function main() {
-      await setupCamera();
-      await loadModel();
-      detectFrame();
-    }
-
-    main();
-  </script>
 </body>
 </html>
